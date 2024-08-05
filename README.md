@@ -64,7 +64,8 @@ cd RedhatCVEChecker
 pip install requests beautifulsoup4 tqdm
 
 # Prepare the input file
-#Usually CVE's scanner like tenable/nessus agent will generate the report from where you can copy the list of CVE's mentioned in a file.
+#Usually CVE's scanner like tenable/nessus agent will generate the report from 
+#where you can copy the list of CVE's mentioned in a file.
 echo "RHSA-2024:4580" > /tmp/RHEL8Fixes.txt
 echo "CVE-2021-12345" >> /tmp/RHEL8Fixes.txt
 
