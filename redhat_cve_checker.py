@@ -1,3 +1,4 @@
+import os
 import requests
 import re
 import subprocess
@@ -6,8 +7,16 @@ from collections import defaultdict
 from tqdm import tqdm
 
 # File paths
-fixes_file = '/tmp/RHEL8Fixes.txt'
+fixes_file = '/tmp/RHEL8CVEs.txt'
 report_file = '/tmp/CVE_Report.txt'
+
+# Check if the fixes file exists
+if not os.path.exists(fixes_file):
+    print(f"Error: The file '{fixes_file}' is required but not found.")
+    print("Please create a file named 'RHEL8CVEs.txt' in the /tmp directory with the following format:")
+    print("Example contents:")
+    print("RHSA-2024:4580\nRHSA-2024:4579\nRHSA-2022-4581")
+    exit(1)
 
 # Function to fetch Security Advisory and CVEs from RHSA entries
 def fetch_security_advisory_and_cves(rhsa_id):
@@ -37,7 +46,7 @@ def check_cve(cve):
 security_advisory_data = defaultdict(list)
 with open(fixes_file, 'r') as file:
     lines = file.readlines()
-    for line in tqdm(lines, desc="Processing lines"):
+    for line in tqdm(lines, desc="Reading Redhat CVE's from file"):
         line = line.strip()
         if 'RHSA-' in line:
             rhsa_id = re.search(r'RHSA-\d{4}:\d+', line).group()
@@ -50,7 +59,7 @@ with open(fixes_file, 'r') as file:
 fixed_cves = defaultdict(list)
 not_fixed_cves = defaultdict(list)
 
-for advisory, cves in tqdm(security_advisory_data.items(), desc="Checking CVEs"):
+for advisory, cves in tqdm(security_advisory_data.items(), desc="Checking if CVE's fix is available in VM"):
     for cve in cves:
         if check_cve(cve):
             fixed_cves[advisory].append(cve)
@@ -81,4 +90,3 @@ with open(report_file, 'w') as report:
             report.write(f"  - {cve}\n")
 
 print(f"Report generated at: {report_file}")
-
