@@ -34,14 +34,12 @@ This Python script is designed to check whether specific CVEs (Common Vulnerabil
 ## Usage
 
 1. **Prepare the Input File:**
-    - Create a file named `RHEL8Fixes.txt` in the `/tmp` directory.
+    - Create a file named `RHEL8CVEs.txt` in the `/tmp` directory.
     - List the RHEL advisories and CVEs you want to check, one per line.
     - Example:
         ```
         RHSA-2024:4580
-        CVE-2021-12345
         RHSA-2024:4579
-        CVE-2022-23456
         ```
 
 2. **Run the Script:**
@@ -66,8 +64,8 @@ pip install requests beautifulsoup4 tqdm
 # Prepare the input file
 #Usually CVE's scanner like tenable/nessus agent will generate the report from 
 #where you can copy the list of CVE's mentioned in a file.
-echo "RHSA-2024:4580" > /tmp/RHEL8Fixes.txt
-echo "CVE-2021-12345" >> /tmp/RHEL8Fixes.txt
+echo "RHSA-2024:4580" > /tmp/RHEL8CVEs.txt
+echo "CVE-2021-12345" >> /tmp/RHEL8CVEs.txt
 
 # Run the script
 python redhat_cve_checker.py
