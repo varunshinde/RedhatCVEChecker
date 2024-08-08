@@ -4,7 +4,7 @@
 
 ## Overview
 
-This Python script is designed to check whether Redhat CVEs which naming starts as RHSA-XXX-XXXX(Common Vulnerabilities and Exposures) have been fixed on a Red Hat system. It fetches CVEs from Red Hat Security Advisories (RHSA) and categorizes them based on their fix status.
+This Python script is designed to check whether Redhat CVEs with naming starts as RHSA-XXX-XXXX(Common Vulnerabilities and Exposures) + package name have been fixed on a Red Hat system. It fetches CVEs from Red Hat Security Advisories (RHSA) and categorizes them based on their fix status.
 
 ## Features
 
