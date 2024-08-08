@@ -28,7 +28,7 @@ This Python script is designed to check whether Redhat CVEs which naming starts 
 
 2. **Install Required Packages:**
     ```bash
-    pip install requests beautifulsoup4 tqdm
+    pip install requests beautifulsoup4
     ```
 
 ## Usage
