@@ -1,92 +1,189 @@
-import os
-import requests
 import re
 import subprocess
+import requests
 from bs4 import BeautifulSoup
+import os
 from collections import defaultdict
-from tqdm import tqdm
 
-# File paths
-fixes_file = '/tmp/RHEL8CVEs.txt'
-report_file = '/tmp/CVE_Report.txt'
+def parse_rhsa_line(line):
+    """
+    Parse a line from the input file to extract RHSA and package information.
+    """
+    match = re.match(r'RHEL \d+ : (.+) \((RHSA-\d+:\d+)\)', line)
+    if match:
+        package = match.group(1).strip()
+        rhsa = match.group(2)
+        return package, rhsa
+    return None, None
 
-# Check if the fixes file exists
-if not os.path.exists(fixes_file):
-    print(f"Error: The file '{fixes_file}' is required but not found.")
-    print("Please create a file named 'RHEL8CVEs.txt' in the /tmp directory with the following format:")
-    print("Example contents:")
-    print("RHSA-2024:4580\nRHSA-2024:4579\nRHSA-2022-4581")
-    exit(1)
+def fetch_cves_and_advisory(rhsa):
+    """
+    Fetch CVEs and security advisory for a given RHSA.
+    """
+    url = f"https://access.redhat.com/errata/{rhsa}"
+    print(f"Fetching data for {rhsa} from {url}")
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching {url}: {str(e)}")
+        return [], "Unknown"
 
-# Function to fetch Security Advisory and CVEs from RHSA entries
-def fetch_security_advisory_and_cves(rhsa_id):
-    url = f"https://access.redhat.com/errata/{rhsa_id}"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-
-    # Fetch Security Advisory
-    advisory_value = "unknown"
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Fetch Security advisory(Severity)
+    advisory = "Unknown"
     div_tag = soup.find('div', {'id': 'type-severity'})
     if div_tag:
         p_tag = div_tag.find('p')
         if p_tag:
-            advisory_value = p_tag.text.strip().split(": ")[1]
+            advisory_parts = p_tag.text.strip().split(": ")
+            if len(advisory_parts) > 1:
+                advisory = advisory_parts[1]
+    print(f"Advisory for {rhsa}: {advisory}")
 
-    # Fetch CVEs
+    # Fetch CVEs under each RHSA Vulnerability
     cves = list(set(re.findall(r'CVE-\d{4}-\d+', response.text)))
+    print(f"CVEs found for {rhsa}: {cves}")
     
-    return advisory_value, cves
+    return cves, advisory
 
-# Function to check if a CVE fix is available in the kernel changelog
-def check_cve(cve):
-    result = subprocess.run(['rpm', '-q', '--changelog', 'kernel'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    return cve in result.stdout
+def check_cve_fixed(cve, package):
+    """
+    Check if a CVE is fixed in the current Linux image. Logic has been separated for the kernel and other packages.
+    More optimized way will be updated later on. 
+    """
+    if not re.match(r'CVE-\d{4}-\d+', cve):
+        print(f"Invalid CVE format: {cve}")
+        return False
 
-# Read fixes from the file and fetch Security Advisory and CVEs for RHSA entries
-security_advisory_data = defaultdict(list)
-with open(fixes_file, 'r') as file:
-    lines = file.readlines()
-    for line in tqdm(lines, desc="Reading Redhat CVE's from file"):
-        line = line.strip()
-        if 'RHSA-' in line:
-            rhsa_id = re.search(r'RHSA-\d{4}:\d+', line).group()
-            security_advisory, cves = fetch_security_advisory_and_cves(rhsa_id)
-            security_advisory_data[security_advisory].extend(cves)
-        elif 'CVE-' in line:
-            security_advisory_data['unknown'].append(line)
-
-# Check if fixes are available for the CVEs and categorize them
-fixed_cves = defaultdict(list)
-not_fixed_cves = defaultdict(list)
-
-for advisory, cves in tqdm(security_advisory_data.items(), desc="Checking if CVE's fix is available in VM"):
-    for cve in cves:
-        if check_cve(cve):
-            fixed_cves[advisory].append(cve)
+    if package.lower() == 'kernel':
+        cmd = f"rpm -q --changelog kernel | grep {cve}"
+    else:
+        cmd = f"rpm -q --changelog {package} | grep {cve}"
+    
+    print(f"Checking if {cve} is fixed in {package}")
+    try:
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        stdout, stderr = process.communicate()
+        
+        if process.returncode == 0:
+            print(f"{cve} is fixed in {package}")
+            return True
         else:
-            not_fixed_cves[advisory].append(cve)
+            print(f"{cve} is not fixed in {package}")
+            return False
+    except Exception as e:
+        print(f"Error checking {cve} in {package}: {str(e)}")
+        return False
 
-# Calculate total counts
-total_cves = sum(len(cves) for cves in security_advisory_data.values())
-total_fixed = sum(len(cves) for cves in fixed_cves.values())
-total_not_fixed = sum(len(cves) for cves in not_fixed_cves.values())
+def categorize_cves(rhsa_list):
+    """
+    Categorize CVEs as fixed or not fixed, subcategorized by security advisory and package.
+    """
+    fixed = defaultdict(lambda: defaultdict(list))
+    not_fixed = defaultdict(lambda: defaultdict(list))
+    total_cves = 0
+    fixed_count = 0
+    not_fixed_count = 0
+    
+    for package, rhsa in rhsa_list:
+        print(f"\nProcessing {rhsa} for package {package}")
+        try:
+            cves, advisory = fetch_cves_and_advisory(rhsa)
+            if not cves:
+                print(f"No CVEs found for {rhsa}")
+                continue
+            
+            total_cves += len(cves)
+            for cve in cves:
+                if check_cve_fixed(cve, package):
+                    fixed[advisory][package].append(cve)
+                    fixed_count += 1
+                else:
+                    not_fixed[advisory][package].append(cve)
+                    not_fixed_count += 1
+        except Exception as e:
+            print(f"Error processing {rhsa}: {str(e)}")
+    
+    return fixed, not_fixed, total_cves, fixed_count, not_fixed_count
 
-# Generate the report
-with open(report_file, 'w') as report:
-    report.write(f"Total CVEs: {total_cves}\n")
-    report.write(f"Fixed CVEs: {total_fixed}\n")
-    report.write(f"Not Fixed CVEs: {total_not_fixed}\n\n")
+def save_results_to_file(fixed, not_fixed, total_cves, fixed_count, not_fixed_count, output_file):
+    """
+    Save the results to a file.
+    """
+    with open(output_file, 'w') as file:
+        file.write("Results:\n")
+        file.write(f"Total CVEs processed: {total_cves}\n")
+        file.write(f"Fixed CVEs: {fixed_count}\n")
+        file.write(f"Not Fixed CVEs: {not_fixed_count}\n")
+        
+        file.write("\nFixed CVEs:\n")
+        for advisory, packages in fixed.items():
+            file.write(f"  {advisory}:\n")
+            for package, cves in packages.items():
+                file.write(f"    {package}:\n")
+                for cve in cves:
+                    file.write(f"      - {cve}\n")
+        
+        file.write("\nNot Fixed CVEs:\n")
+        for advisory, packages in not_fixed.items():
+            file.write(f"  {advisory}:\n")
+            for package, cves in packages.items():
+                file.write(f"    {package}:\n")
+                for cve in cves:
+                    file.write(f"      - {cve}\n")
+        
+        if not fixed and not not_fixed:
+            file.write("No CVEs were processed. This could be due to network issues, incorrect RHSA format, or problems with the rpm command.\n")
 
-    report.write("Fixed CVEs:\n")
-    for advisory, cves in fixed_cves.items():
-        report.write(f"\n{advisory}:\n")
-        for cve in cves:
-            report.write(f"  - {cve}\n")
+def main():
+    input_file = '/tmp/RHEL8CVE.txt'
+    output_file = '/tmp/CVE_Report.txt'
+    
+    if not os.path.exists(input_file):
+        print(f"Error: Input file not found at {input_file}")
+        return
 
-    report.write("\nNot Fixed CVEs:\n")
-    for advisory, cves in not_fixed_cves.items():
-        report.write(f"\n{advisory}:\n")
-        for cve in cves:
-            report.write(f"  - {cve}\n")
+    with open(input_file, 'r') as file:
+        rhsa_list = []
+        for line in file:
+            package, rhsa = parse_rhsa_line(line.strip())
+            if package and rhsa:
+                rhsa_list.append((package, rhsa))
+    
+    print(f"Found {len(rhsa_list)} valid RHSA entries in the input file")
+    
+    fixed, not_fixed, total_cves, fixed_count, not_fixed_count = categorize_cves(rhsa_list)
+    
+    print("\nResults:")
+    print(f"Total CVEs processed: {total_cves}")
+    print(f"Fixed CVEs: {fixed_count}")
+    print(f"Not Fixed CVEs: {not_fixed_count}")
+    
+    print("\nFixed CVEs:")
+    for advisory, packages in fixed.items():
+        print(f"  {advisory}:")
+        for package, cves in packages.items():
+            print(f"    {package}:")
+            for cve in cves:
+                print(f"      - {cve}")
+    
+    print("\nNot Fixed CVEs:")
+    for advisory, packages in not_fixed.items():
+        print(f"  {advisory}:")
+        for package, cves in packages.items():
+            print(f"    {package}:")
+            for cve in cves:
+                print(f"      - {cve}")
+    
+    if not fixed and not not_fixed:
+        print("No CVEs were processed. This could be due to network issues, incorrect RHSA format, or problems with the rpm command.")
+    
+    # Save results to a file
+    save_results_to_file(fixed, not_fixed, total_cves, fixed_count, not_fixed_count, output_file)
+    print(f"\nResults saved to {output_file}")
 
-print(f"Report generated at: {report_file}")
+if __name__ == "__main__":
+    main()
+
