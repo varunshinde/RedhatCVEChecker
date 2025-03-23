@@ -1,0 +1,12 @@
+# Example input file for RedhatCVEChecker
+# This file supports both RHSA and direct CVE formats
+
+# RHSA format examples
+RHEL 8 : cups (RHSA-2024:4580)
+RHEL 8 : httpd:2.4 (RHSA-2024:3121)
+RHEL 8 : kernel (RHSA-2024:4211)
+
+# Direct CVE format examples
+RHEL 8 : git (CVE-2024-4579)
+RHEL 8 : kernel (CVE-2023-3567)
+RHEL 8 : openssl (CVE-2023-0286)

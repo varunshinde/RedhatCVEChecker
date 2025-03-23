@@ -5,48 +5,85 @@ from bs4 import BeautifulSoup
 import os
 from collections import defaultdict
 
-def parse_rhsa_line(line):
+def parse_input_line(line):
     """
-    Parse a line from the input file to extract RHSA and package information.
+    Parse a line from the input file to extract RHSA/CVE and package information.
+    Supports both RHSA format and direct CVE format.
     """
-    match = re.match(r'RHEL \d+ : (.+) \((RHSA-\d+:\d+)\)', line)
-    if match:
-        package = match.group(1).strip()
-        rhsa = match.group(2)
-        return package, rhsa
-    return None, None
-
-def fetch_cves_and_advisory(rhsa):
-    """
-    Fetch CVEs and security advisory for a given RHSA.
-    """
-    url = f"https://access.redhat.com/errata/{rhsa}"
-    print(f"Fetching data for {rhsa} from {url}")
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching {url}: {str(e)}")
-        return [], "Unknown"
-
-    soup = BeautifulSoup(response.content, 'html.parser')
+    # Try to match RHSA format first
+    rhsa_match = re.match(r'RHEL \d+ : (.+) \((RHSA-\d+:\d+)\)', line)
+    if rhsa_match:
+        package = rhsa_match.group(1).strip()
+        identifier = rhsa_match.group(2)
+        return package, identifier, "RHSA"
     
-    # Fetch Security advisory(Severity)
-    advisory = "Unknown"
-    div_tag = soup.find('div', {'id': 'type-severity'})
-    if div_tag:
-        p_tag = div_tag.find('p')
-        if p_tag:
-            advisory_parts = p_tag.text.strip().split(": ")
-            if len(advisory_parts) > 1:
-                advisory = advisory_parts[1]
-    print(f"Advisory for {rhsa}: {advisory}")
-
-    # Fetch CVEs under each RHSA Vulnerability
-    cves = list(set(re.findall(r'CVE-\d{4}-\d+', response.text)))
-    print(f"CVEs found for {rhsa}: {cves}")
+    # Try to match direct CVE format
+    cve_match = re.match(r'RHEL \d+ : (.+) \((CVE-\d{4}-\d+)\)', line)
+    if cve_match:
+        package = cve_match.group(1).strip()
+        identifier = cve_match.group(2)
+        return package, identifier, "CVE"
     
-    return cves, advisory
+    return None, None, None
+
+def fetch_cves_and_advisory(identifier, identifier_type="RHSA"):
+    """
+    Fetch CVEs and security advisory for a given RHSA or CVE.
+    """
+    if identifier_type == "RHSA":
+        url = f"https://access.redhat.com/errata/{identifier}"
+        print(f"Fetching data for {identifier} from {url}")
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching {url}: {str(e)}")
+            return [], "Unknown"
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Fetch Security advisory(Severity)
+        advisory = "Unknown"
+        div_tag = soup.find('div', {'id': 'type-severity'})
+        if div_tag:
+            p_tag = div_tag.find('p')
+            if p_tag:
+                advisory_parts = p_tag.text.strip().split(": ")
+                if len(advisory_parts) > 1:
+                    advisory = advisory_parts[1]
+        print(f"Advisory for {identifier}: {advisory}")
+
+        # Fetch CVEs under each RHSA Vulnerability
+        cves = list(set(re.findall(r'CVE-\d{4}-\d+', response.text)))
+        print(f"CVEs found for {identifier}: {cves}")
+        
+        return cves, advisory
+    
+    elif identifier_type == "CVE":
+        # For direct CVE, we'll fetch advisory information from Red Hat CVE database
+        url = f"https://access.redhat.com/security/cve/{identifier}"
+        print(f"Fetching data for {identifier} from {url}")
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching {url}: {str(e)}")
+            return [identifier], "Unknown"
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Try to extract severity from the CVE page
+        advisory = "Unknown"
+        severity_div = soup.find('div', {'class': 'field--name-field-severity'})
+        if severity_div:
+            severity_item = severity_div.find('div', {'class': 'field__item'})
+            if severity_item:
+                advisory = severity_item.text.strip()
+        
+        print(f"Advisory for {identifier}: {advisory}")
+        return [identifier], advisory
+    
+    return [], "Unknown"
 
 def check_cve_fixed(cve, package):
     """
@@ -77,7 +114,7 @@ def check_cve_fixed(cve, package):
         print(f"Error checking {cve} in {package}: {str(e)}")
         return False
 
-def categorize_cves(rhsa_list):
+def categorize_cves(entry_list):
     """
     Categorize CVEs as fixed or not fixed, subcategorized by security advisory and package.
     """
@@ -87,12 +124,12 @@ def categorize_cves(rhsa_list):
     fixed_count = 0
     not_fixed_count = 0
     
-    for package, rhsa in rhsa_list:
-        print(f"\nProcessing {rhsa} for package {package}")
+    for package, identifier, identifier_type in entry_list:
+        print(f"\nProcessing {identifier} ({identifier_type}) for package {package}")
         try:
-            cves, advisory = fetch_cves_and_advisory(rhsa)
+            cves, advisory = fetch_cves_and_advisory(identifier, identifier_type)
             if not cves:
-                print(f"No CVEs found for {rhsa}")
+                print(f"No CVEs found for {identifier}")
                 continue
             
             total_cves += len(cves)
@@ -104,7 +141,7 @@ def categorize_cves(rhsa_list):
                     not_fixed[advisory][package].append(cve)
                     not_fixed_count += 1
         except Exception as e:
-            print(f"Error processing {rhsa}: {str(e)}")
+            print(f"Error processing {identifier}: {str(e)}")
     
     return fixed, not_fixed, total_cves, fixed_count, not_fixed_count
 
@@ -135,7 +172,7 @@ def save_results_to_file(fixed, not_fixed, total_cves, fixed_count, not_fixed_co
                     file.write(f"      - {cve}\n")
         
         if not fixed and not not_fixed:
-            file.write("No CVEs were processed. This could be due to network issues, incorrect RHSA format, or problems with the rpm command.\n")
+            file.write("No CVEs were processed. This could be due to network issues, incorrect format, or problems with the rpm command.\n")
 
 def main():
     input_file = '/tmp/RHEL8CVE.txt'
@@ -146,15 +183,17 @@ def main():
         return
 
     with open(input_file, 'r') as file:
-        rhsa_list = []
+        entry_list = []
         for line in file:
-            package, rhsa = parse_rhsa_line(line.strip())
-            if package and rhsa:
-                rhsa_list.append((package, rhsa))
+            package, identifier, identifier_type = parse_input_line(line.strip())
+            if package and identifier and identifier_type:
+                entry_list.append((package, identifier, identifier_type))
+            else:
+                print(f"Warning: Could not parse line: {line.strip()}")
     
-    print(f"Found {len(rhsa_list)} valid RHSA entries in the input file")
+    print(f"Found {len(entry_list)} valid entries in the input file")
     
-    fixed, not_fixed, total_cves, fixed_count, not_fixed_count = categorize_cves(rhsa_list)
+    fixed, not_fixed, total_cves, fixed_count, not_fixed_count = categorize_cves(entry_list)
     
     print("\nResults:")
     print(f"Total CVEs processed: {total_cves}")
@@ -178,7 +217,7 @@ def main():
                 print(f"      - {cve}")
     
     if not fixed and not not_fixed:
-        print("No CVEs were processed. This could be due to network issues, incorrect RHSA format, or problems with the rpm command.")
+        print("No CVEs were processed. This could be due to network issues, incorrect format, or problems with the rpm command.")
     
     # Save results to a file
     save_results_to_file(fixed, not_fixed, total_cves, fixed_count, not_fixed_count, output_file)
@@ -186,4 +225,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
